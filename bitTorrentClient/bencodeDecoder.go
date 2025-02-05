@@ -115,7 +115,7 @@ func (d *BencodeDecoder) decodeString() (string, error) {
 
 // Decode a list (l...e)
 func (d *BencodeDecoder) decodeList() ([]interface{}, error) {
-	_, err := d.next() // Consume 'l'
+	_, err := d.next()
 	if err != nil {
 		return nil, err
 	}
@@ -176,10 +176,13 @@ func (d *BencodeDecoder) decodeDict() (map[string]interface{}, error) {
 }
 
 func writeToFile(data interface{}, filename string) error {
+	err := os.Remove(filename)
+
 	file, err := os.Create(filename)
 	if err != nil {
 		return err
 	}
+
 	defer file.Close()
 
 	jsonData, err := json.MarshalIndent(data, "", "  ")
@@ -192,7 +195,7 @@ func writeToFile(data interface{}, filename string) error {
 }
 
 func main() {
-	file, err := os.Open("example.torrent")
+	file, err := os.Open("big-buck-bunny.torrent")
 	if err != nil {
 		fmt.Println("Error opening file:", err)
 		return
