@@ -1,0 +1,3 @@
+magnet links
+distributed hash table
+announce to multiple trackers

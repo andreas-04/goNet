@@ -14,7 +14,7 @@
 		postfixing it with e. Keys can only be byte strings and the pair is encoded by
 		concatenating the key and value without any delimiters. d<<k1><v1><k2><v2>…>e
 */
-package main
+package bittorrentclient
 
 import (
 	"bufio"
@@ -194,8 +194,8 @@ func writeToFile(data interface{}, filename string) error {
 	return err
 }
 
-func main() {
-	file, err := os.Open("big-buck-bunny.torrent")
+func decode(filename string) {
+	file, err := os.Open(filename)
 	if err != nil {
 		fmt.Println("Error opening file:", err)
 		return
@@ -210,7 +210,7 @@ func main() {
 		return
 	}
 
-	outputFilename := "decoded_output.json"
+	outputFilename := "decoded_torrent.json"
 	err = writeToFile(data, outputFilename)
 	if err != nil {
 		fmt.Println("Error writing to file:", err)
