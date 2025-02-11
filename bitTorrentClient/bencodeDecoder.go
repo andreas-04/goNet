@@ -18,12 +18,34 @@ package bittorrentclient
 
 import (
 	"bufio"
-	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
-	"os"
 	"strconv"
 )
+
+type Torrent struct {
+	Announce     string
+	AnnounceList [][]string
+	CreationDate int64
+	Comment      string
+	CreatedBy    string
+	Info         TorrentInfo
+}
+
+type TorrentInfo struct {
+	PieceLength int64
+	Pieces      []byte
+	Private     int64
+	Name        string
+	Length      int64
+	Files       []TorrentFile
+}
+
+type TorrentFile struct {
+	Length int64
+	Path   []string
+}
 
 type BencodeDecoder struct {
 	reader *bufio.Reader
@@ -42,7 +64,7 @@ func (d *BencodeDecoder) peek() (byte, error) {
 	if err != nil {
 		return 0, err
 	}
-	_ = d.reader.UnreadByte() // Push it back
+	_ = d.reader.UnreadByte()
 	return ch, nil
 }
 
@@ -53,21 +75,20 @@ func (d *BencodeDecoder) decode() (interface{}, error) {
 	}
 
 	switch {
-	case ch == 'i': // Integer
+	case ch == 'i':
 		return d.decodeInt()
-	case ch >= '0' && ch <= '9': // String
+	case ch >= '0' && ch <= '9':
 		return d.decodeString()
-	case ch == 'l': // List
+	case ch == 'l':
 		return d.decodeList()
-	case ch == 'd': // Dictionary
+	case ch == 'd':
 		return d.decodeDict()
 	default:
 		return nil, fmt.Errorf("unexpected character '%c'", ch)
 	}
 }
 
-// Decode an integer (i<num>e)
-func (d *BencodeDecoder) decodeInt() (int, error) {
+func (d *BencodeDecoder) decodeInt() (int64, error) {
 	_, err := d.next()
 	if err != nil {
 		return 0, err
@@ -85,10 +106,9 @@ func (d *BencodeDecoder) decodeInt() (int, error) {
 		numStr = append(numStr, ch)
 	}
 
-	return strconv.Atoi(string(numStr))
+	return strconv.ParseInt(string(numStr), 10, 64)
 }
 
-// Decode a string (length:string)
 func (d *BencodeDecoder) decodeString() (string, error) {
 	var lengthStr []byte
 
@@ -103,7 +123,7 @@ func (d *BencodeDecoder) decodeString() (string, error) {
 		lengthStr = append(lengthStr, ch)
 	}
 
-	length, err := strconv.Atoi(string(lengthStr))
+	length, err := strconv.ParseInt(string(lengthStr), 10, 64)
 	if err != nil {
 		return "", err
 	}
@@ -113,7 +133,6 @@ func (d *BencodeDecoder) decodeString() (string, error) {
 	return string(strBytes), err
 }
 
-// Decode a list (l...e)
 func (d *BencodeDecoder) decodeList() ([]interface{}, error) {
 	_, err := d.next()
 	if err != nil {
@@ -141,7 +160,6 @@ func (d *BencodeDecoder) decodeList() ([]interface{}, error) {
 	return list, nil
 }
 
-// Decode a dictionary (d...e)
 func (d *BencodeDecoder) decodeDict() (map[string]interface{}, error) {
 	_, err := d.next()
 	if err != nil {
@@ -175,47 +193,177 @@ func (d *BencodeDecoder) decodeDict() (map[string]interface{}, error) {
 	return dict, nil
 }
 
-func writeToFile(data interface{}, filename string) error {
-	err := os.Remove(filename)
-
-	file, err := os.Create(filename)
-	if err != nil {
-		return err
-	}
-
-	defer file.Close()
-
-	jsonData, err := json.MarshalIndent(data, "", "  ")
-	if err != nil {
-		return err
-	}
-
-	_, err = file.Write(jsonData)
-	return err
-}
-
-func decode(filename string) {
-	file, err := os.Open(filename)
-	if err != nil {
-		fmt.Println("Error opening file:", err)
-		return
-	}
-	defer file.Close()
-
-	decoder := NewDecoder(file)
-
+func DecodeTorrent(r io.Reader) (*Torrent, error) {
+	decoder := NewDecoder(r)
 	data, err := decoder.decode()
 	if err != nil {
-		fmt.Println("Error decoding file:", err)
-		return
+		return nil, err
+	}
+	return parseTorrent(data)
+}
+
+func parseTorrent(data interface{}) (*Torrent, error) {
+	topLevel, ok := data.(map[string]interface{})
+	if !ok {
+		return nil, errors.New("top-level data is not a dictionary")
 	}
 
-	outputFilename := "decoded_torrent.json"
-	err = writeToFile(data, outputFilename)
+	torrent := &Torrent{}
+
+	if announce, ok := topLevel["announce"].(string); ok {
+		torrent.Announce = announce
+	} else {
+		return nil, errors.New("missing required field 'announce'")
+	}
+
+	if announceListInterface, ok := topLevel["announce-list"]; ok {
+		announceList, ok := announceListInterface.([]interface{})
+		if !ok {
+			return nil, errors.New("announce-list is not a list")
+		}
+		for _, tierInterface := range announceList {
+			tier, ok := tierInterface.([]interface{})
+			if !ok {
+				return nil, errors.New("announce-list tier is not a list")
+			}
+			var tierUrls []string
+			for _, urlInterface := range tier {
+				url, ok := urlInterface.(string)
+				if !ok {
+					return nil, errors.New("announce-list contains non-string URL")
+				}
+				tierUrls = append(tierUrls, url)
+			}
+			torrent.AnnounceList = append(torrent.AnnounceList, tierUrls)
+		}
+	}
+
+	if creationDateInterface, ok := topLevel["creation date"]; ok {
+		creationDate, ok := creationDateInterface.(int64)
+		if !ok {
+			return nil, errors.New("creation date is not an integer")
+		}
+		torrent.CreationDate = creationDate
+	}
+
+	if comment, ok := topLevel["comment"].(string); ok {
+		torrent.Comment = comment
+	}
+
+	if createdBy, ok := topLevel["created by"].(string); ok {
+		torrent.CreatedBy = createdBy
+	}
+
+	infoInterface, ok := topLevel["info"]
+	if !ok {
+		return nil, errors.New("missing required field 'info'")
+	}
+	infoMap, ok := infoInterface.(map[string]interface{})
+	if !ok {
+		return nil, errors.New("info is not a dictionary")
+	}
+	info, err := parseTorrentInfo(infoMap)
 	if err != nil {
-		fmt.Println("Error writing to file:", err)
-		return
+		return nil, fmt.Errorf("error parsing info: %v", err)
+	}
+	torrent.Info = *info
+
+	return torrent, nil
+}
+
+func parseTorrentInfo(infoMap map[string]interface{}) (*TorrentInfo, error) {
+	info := &TorrentInfo{}
+
+	if pieceLengthInterface, ok := infoMap["piece length"]; ok {
+		pieceLength, ok := pieceLengthInterface.(int64)
+		if !ok {
+			return nil, errors.New("piece length is not an integer")
+		}
+		info.PieceLength = pieceLength
+	} else {
+		return nil, errors.New("missing required field 'piece length'")
 	}
 
-	fmt.Println("Decoded data written to", outputFilename)
+	if piecesInterface, ok := infoMap["pieces"]; ok {
+		pieces, ok := piecesInterface.(string)
+		if !ok {
+			return nil, errors.New("pieces is not a string")
+		}
+		info.Pieces = []byte(pieces)
+	} else {
+		return nil, errors.New("missing required field 'pieces'")
+	}
+
+	if name, ok := infoMap["name"].(string); ok {
+		info.Name = name
+	} else {
+		return nil, errors.New("missing required field 'name'")
+	}
+
+	if privateInterface, ok := infoMap["private"]; ok {
+		private, ok := privateInterface.(int64)
+		if !ok {
+			return nil, errors.New("private is not an integer")
+		}
+		info.Private = private
+	}
+
+	_, hasLength := infoMap["length"]
+	_, hasFiles := infoMap["files"]
+
+	if hasLength && hasFiles {
+		return nil, errors.New("info contains both length and files")
+	}
+
+	if hasLength {
+		length, ok := infoMap["length"].(int64)
+		if !ok {
+			return nil, errors.New("length is not an integer")
+		}
+		info.Length = length
+	} else if hasFiles {
+		filesInterface, _ := infoMap["files"]
+		filesList, ok := filesInterface.([]interface{})
+		if !ok {
+			return nil, errors.New("files is not a list")
+		}
+		for _, fileInterface := range filesList {
+			fileMap, ok := fileInterface.(map[string]interface{})
+			if !ok {
+				return nil, errors.New("file entry is not a dictionary")
+			}
+			file := TorrentFile{}
+			lengthInterface, ok := fileMap["length"]
+			if !ok {
+				return nil, errors.New("file missing length")
+			}
+			length, ok := lengthInterface.(int64)
+			if !ok {
+				return nil, errors.New("file length is not an integer")
+			}
+			file.Length = length
+			pathInterface, ok := fileMap["path"]
+			if !ok {
+				return nil, errors.New("file missing path")
+			}
+			pathList, ok := pathInterface.([]interface{})
+			if !ok {
+				return nil, errors.New("file path is not a list")
+			}
+			var path []string
+			for _, p := range pathList {
+				pathPart, ok := p.(string)
+				if !ok {
+					return nil, errors.New("path part is not a string")
+				}
+				path = append(path, pathPart)
+			}
+			file.Path = path
+			info.Files = append(info.Files, file)
+		}
+	} else {
+		return nil, errors.New("info missing both length and files")
+	}
+
+	return info, nil
 }
